@@ -1,0 +1,6 @@
+2026-03-02T21:47:05.461168Z  WARN arx::utils: arx/src/utils.rs:244: Attempt 1/5: error while calling client.get_version().map_err(|e|
+ArxError::Solana(format!("Failed to check cluster status: {}", e))): Solana network error: Failed to check cluster status: error sending request for url (http://host.docker.internal:8899/)
+2026-03-02T21:47:37.463764Z  WARN arx::utils: arx/src/utils.rs:244: Attempt 2/5: error while calling client.get_version().map_err(|e|
+ArxError::Solana(format!("Failed to check cluster status: {}", e))): Solana network error: Failed to check cluster status: error sending request for url (http://host.docker.internal:8899/)
+2026-03-02T21:48:11.467227Z  WARN arx::utils: arx/src/utils.rs:244: Attempt 3/5: error while calling client.get_version().map_err(|e|
+ArxError::Solana(format!("Failed to check cluster status: {}", e))): Solana network error: Failed to check cluster status: error sending request for url (http://host.docker.internal:8899/)
