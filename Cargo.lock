@@ -77,6 +77,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "allocator-api2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
+
+[[package]]
 name = "ambassador"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -314,9 +320,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "arcis"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3385304c5e9372df1aeb63365660e1dd4aba237aabd12601694112d1147e7625"
+checksum = "c1b9edf9557e19aa700a299d93e560dfd4db482e9ae21409472b3d76ee5dee29"
 dependencies = [
  "arcis-compiler",
  "arcis-interpreter-proc-macros",
@@ -329,9 +335,9 @@ dependencies = [
 
 [[package]]
 name = "arcis-compiler"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a94104756f071ab8eca8f200be86328adcf6499bf56e887d80a7c091a8c524fe"
+checksum = "ab0024bc5c8df5750e434e0af84b69bcea1e3defcc29d00e39a0fd127c3e48b4"
 dependencies = [
  "aes",
  "arcis-interface",
@@ -373,9 +379,9 @@ dependencies = [
 
 [[package]]
 name = "arcis-interface"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70b9f6dbaf71116970b5da59068daa606cecba3a9f8a0de50d17c98f3541fd32"
+checksum = "2970288d6b796aab37eaf89db396a0d399f56ffad4c5a5c5e9765b5d1ab1c561"
 dependencies = [
  "serde",
  "serde_json",
@@ -383,9 +389,9 @@ dependencies = [
 
 [[package]]
 name = "arcis-internal-expr-macro"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ede270c49bad0d1dbb9cd8bf2f0ee749c84d1cf99ce0fd50fa1ff5e0b0e6ab4a"
+checksum = "1f23cf964f00665862f84147b51a23daa731a6b7bef371a02ad653b36de33e08"
 dependencies = [
  "indexmap 2.13.0",
  "proc-macro2",
@@ -396,12 +402,13 @@ dependencies = [
 
 [[package]]
 name = "arcis-interpreter"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3c0ba16d83c8a435bf63952d1fbf8803ab4766fa60627edb9fe19a3e2aeb466"
+checksum = "9ebe042146431373ff2fcd72638ac69b7feb932c50226cdcccf3b7dd0ff50911"
 dependencies = [
  "arcis-compiler",
  "arcis-interface",
+ "blink-alloc",
  "cargo_metadata",
  "ff",
  "indexmap 2.13.0",
@@ -416,18 +423,18 @@ dependencies = [
 
 [[package]]
 name = "arcis-interpreter-proc-macros"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4219ff115b099220730a83f8854d4d03032765980f2e0fbeaea277ff2a0863b"
+checksum = "a643ff1f53b7ef76a7622e7b1c159cf3d233da1cb120d9b4343fdb6223271205"
 dependencies = [
  "arcis-interpreter",
 ]
 
 [[package]]
 name = "arcium-anchor"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0dc928c647c4a8b9b0869578ff7020e442b9d98ec8d7ed99cd7743b4e4399cb"
+checksum = "a0cb1dac0fe5c11ad87188913c8a524eacc695cf7f25468f687bc4390ae2586e"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
@@ -440,13 +447,14 @@ dependencies = [
 
 [[package]]
 name = "arcium-client"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b949c647e5590013f3407dba2196dc4cb7cc5f08722ebee387e4332408e614c"
+checksum = "34f7889deb31bce4d921a06f8909a902d3771c1d1a06349b1d796886ec78893d"
 dependencies = [
  "anchor-lang",
  "bytemuck",
  "const-crypto",
+ "rand 0.8.5",
  "solana-address-lookup-table-interface",
  "solana-alt-bn128-bls",
  "solana-program",
@@ -455,9 +463,9 @@ dependencies = [
 
 [[package]]
 name = "arcium-core-utils"
-version = "0.3.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e2d37e52bfecc093df08f1968e1031370fcd2f32226bb5364e2fa04b95621d6"
+checksum = "6c50dfd66d2d01c30ceace2c071eb053540e926938aeb4d9a6be53a3d57ab742"
 dependencies = [
  "arcium-primitives",
  "bincode",
@@ -479,9 +487,9 @@ dependencies = [
 
 [[package]]
 name = "arcium-macros"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "069af4a1bb50ce6a1ac7b3c53502ec1a13560e3ddff20f850cb6ab970b1ccaa9"
+checksum = "d3bec47db339214e09441374179fe5246d5d34f1640ef05f6e99b1be6febef95"
 dependencies = [
  "arcis-interface",
  "convert_case",
@@ -494,9 +502,9 @@ dependencies = [
 
 [[package]]
 name = "arcium-primitives"
-version = "0.3.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44225d4e71e004f462b512e5f35816af9da66cb8bc7f6a050cf7b65bb02ada08"
+checksum = "70f58487e28685cf6a8cd8775523e8a171eb0f961e79284dfec8f0c6fb863c45"
 dependencies = [
  "aes",
  "ambassador",
@@ -917,6 +925,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "blink-alloc"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce4c15bad517bc0fb4a44523adf470e2c3eb3a365769327acdba849948ea3705"
+dependencies = [
+ "allocator-api2 0.4.0",
 ]
 
 [[package]]
@@ -2034,7 +2051,7 @@ version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
 dependencies = [
- "allocator-api2",
+ "allocator-api2 0.2.21",
  "equivalent",
  "foldhash",
 ]

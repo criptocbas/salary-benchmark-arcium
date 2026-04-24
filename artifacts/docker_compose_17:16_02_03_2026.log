@@ -1,17 +1,0 @@
-[stdout] Attaching to arcium-trusted-dealer-1, arx-node-0-1, arx-node-1-1
-[stderr]  Container artifacts-arx-node-1-1 Starting 
-[stderr]  Container artifacts-arx-node-0-1 Starting 
-[stderr]  Container artifacts-arcium-trusted-dealer-1 Starting 
-[stderr]  Container artifacts-arcium-trusted-dealer-1 Started 
-[stderr]  Container artifacts-arx-node-1-1 Started 
-[stderr]  Container artifacts-arx-node-0-1 Started 
-[stderr] arcium-trusted-dealer-1  | Error: "Failed to fetch cluster accounts: error sending request for url (http://host.docker.internal:8899/)"
-[stdout] [Karcium-trusted-dealer-1 exited with code 1 (restarting)
-[stdout] arcium-trusted-dealer-1  | Error: "Failed to fetch cluster accounts: error sending request for url (http://host.docker.internal:8899/)"
-[stdout] [Karcium-trusted-dealer-1 exited with code 1 (restarting)
-[stdout] arcium-trusted-dealer-1  | Error: "Failed to fetch cluster accounts: error sending request for url (http://host.docker.internal:8899/)"
-[stdout] [Karcium-trusted-dealer-1 exited with code 1 (restarting)
-[stdout] arcium-trusted-dealer-1  | Error: "Failed to fetch cluster accounts: error sending request for url (http://host.docker.internal:8899/)"
-[stdout] [Karcium-trusted-dealer-1 exited with code 1
-[stdout] [Karx-node-1-1 exited with code 137
-[stdout] [Karx-node-0-1 exited with code 137

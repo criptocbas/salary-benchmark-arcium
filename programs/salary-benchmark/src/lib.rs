@@ -9,7 +9,7 @@ const COMP_DEF_OFFSET_INIT_BENCHMARK: u32 = comp_def_offset("init_benchmark");
 const COMP_DEF_OFFSET_SUBMIT_SALARY: u32 = comp_def_offset("submit_salary");
 const COMP_DEF_OFFSET_REVEAL_AVERAGE: u32 = comp_def_offset("reveal_average");
 
-declare_id!("aKocyAmvcq1rHMoNmMSRRricijJq1Bph7isj7aehUYp");
+declare_id!("F2ELc1JwtVm75jmJtafDnxDQa7yqM78HuZ2cgcvy8Waa");
 
 #[arcium_program]
 pub mod salary_benchmark {

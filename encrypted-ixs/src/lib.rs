@@ -18,9 +18,9 @@ mod circuits {
     /// Initialize benchmark state with zeroed totals.
     /// Returns MXE-encrypted BenchmarkStats for persistent on-chain storage.
     #[instruction]
-    pub fn init_benchmark(mxe: Mxe) -> Enc<Mxe, BenchmarkStats> {
+    pub fn init_benchmark() -> Enc<Mxe, BenchmarkStats> {
         let stats = BenchmarkStats { total: 0, count: 0 };
-        mxe.from_arcis(stats)
+        Mxe::get().from_arcis(stats)
     }
 
     /// Add an encrypted salary to the running benchmark.

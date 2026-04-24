@@ -32,22 +32,26 @@ describe("Salary Benchmark", () => {
   const provider = anchor.getProvider();
   const arciumProgram = getArciumProgram(provider as anchor.AnchorProvider);
 
-  type Event = anchor.IdlEvents<(typeof program)["idl"]>;
-  const awaitEvent = async <E extends keyof Event>(
-    eventName: E
-  ): Promise<Event[E]> => {
-    let listenerId: number;
-    const event = await new Promise<Event[E]>((res) => {
-      listenerId = program.addEventListener(eventName, (event) => {
-        res(event);
-      });
-    });
-    await program.removeEventListener(listenerId);
-    return event;
-  };
-
   const arciumEnv = getArciumEnv();
   const clusterAccount = getClusterAccAddress(arciumEnv.arciumClusterOffset);
+
+  // Helper: parse events from a transaction signature
+  async function getEventsFromTx(sig: string): Promise<any[]> {
+    const tx = await provider.connection.getTransaction(sig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    if (!tx?.meta?.logMessages) return [];
+    const eventParser = new anchor.EventParser(
+      program.programId,
+      new anchor.BorshCoder(program.idl)
+    );
+    const events: any[] = [];
+    eventParser.parseLogs(tx.meta.logMessages, (event) => {
+      events.push(event);
+    });
+    return events;
+  }
 
   // Helper: derive benchmark PDA
   function getBenchmarkPDA(admin: PublicKey): PublicKey {
@@ -79,7 +83,6 @@ describe("Salary Benchmark", () => {
       mxeAcc.lutOffsetSlot
     );
 
-    // Check if comp def already exists (e.g. from a previous run)
     const compDefInfo = await provider.connection.getAccountInfo(compDefPDA);
     if (compDefInfo) {
       console.log(`Comp def ${circuitName} already exists, skipping init`);
@@ -145,7 +148,6 @@ describe("Salary Benchmark", () => {
     // Phase 2: Initialize benchmark (create zeroed encrypted state)
     // =====================================================================
     console.log("\n--- Init Benchmark ---");
-    const initEventPromise = awaitEvent("benchmarkInitializedEvent");
     const initOffset = new anchor.BN(randomBytes(8), "hex");
     const benchmarkPDA = getBenchmarkPDA(owner.publicKey);
 
@@ -166,22 +168,19 @@ describe("Salary Benchmark", () => {
     );
     console.log("Init benchmark finalize sig:", initFinalize);
 
-    const initEvent = await initEventPromise;
-    console.log("Benchmark initialized by:", initEvent.admin.toBase58());
-
-    // Verify benchmark account
+    // Verify via account state (not events — avoids WebSocket race condition)
     let benchmarkAcc = await program.account.benchmarkAccount.fetch(
       benchmarkPDA
     );
     expect(benchmarkAcc.isInitialized).to.be.true;
     expect(benchmarkAcc.participantCount).to.equal(0);
+    console.log("Benchmark initialized by:", benchmarkAcc.admin.toBase58());
     console.log("Benchmark account initialized successfully");
 
     // =====================================================================
     // Phase 3: Submit 5 salaries (sequential — each must finalize first)
     // =====================================================================
     const salaries = [75000, 85000, 95000, 110000, 120000];
-    // Salaries are in cents: multiply by 100
     const salariesInCents = salaries.map((s) => s * 100);
 
     for (let i = 0; i < salariesInCents.length; i++) {
@@ -189,16 +188,12 @@ describe("Salary Benchmark", () => {
         `\n--- Submit Salary #${i + 1}: $${salaries[i].toLocaleString()} ---`
       );
 
-      const submitEventPromise = awaitEvent("salarySubmittedEvent");
-
-      // Encrypt the salary with x25519 key exchange
       const privateKey = x25519.utils.randomSecretKey();
       const publicKey = x25519.getPublicKey(privateKey);
       const sharedSecret = x25519.getSharedSecret(privateKey, mxePublicKey);
       const cipher = new RescueCipher(sharedSecret);
 
       const nonce = randomBytes(16);
-      // SalaryInput has 1 field: salary (u64)
       const ciphertext = cipher.encrypt(
         [BigInt(salariesInCents[i])],
         nonce
@@ -228,11 +223,10 @@ describe("Salary Benchmark", () => {
       );
       console.log(`Submit finalize sig:`, submitFinalize);
 
-      const submitEvent = await submitEventPromise;
-      console.log(
-        `Participant count: ${submitEvent.participantCount}`
-      );
-      expect(submitEvent.participantCount).to.equal(i + 1);
+      // Verify via account state
+      benchmarkAcc = await program.account.benchmarkAccount.fetch(benchmarkPDA);
+      console.log(`Participant count: ${benchmarkAcc.participantCount}`);
+      expect(benchmarkAcc.participantCount).to.equal(i + 1);
     }
 
     // Verify final participant count
@@ -244,7 +238,6 @@ describe("Salary Benchmark", () => {
     // Phase 4: Reveal average
     // =====================================================================
     console.log("\n--- Reveal Average ---");
-    const revealEventPromise = awaitEvent("averageRevealedEvent");
     const revealOffset = new anchor.BN(randomBytes(8), "hex");
 
     const revealSig = await program.methods
@@ -264,8 +257,14 @@ describe("Salary Benchmark", () => {
     );
     console.log("Reveal finalize sig:", revealFinalize);
 
-    const revealEvent = await revealEventPromise;
-    const averageCents = Number(revealEvent.average);
+    // Parse the AverageRevealedEvent from the finalization transaction logs
+    const events = await getEventsFromTx(revealFinalize);
+    const revealEvent = events.find(
+      (e) => e.name === "averageRevealedEvent"
+    );
+    expect(revealEvent).to.not.be.undefined;
+
+    const averageCents = Number(revealEvent!.data.average);
     const averageDollars = averageCents / 100;
 
     console.log(`\nRevealed average (cents): ${averageCents}`);

@@ -5,8 +5,11 @@
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },
   "dependencies": {
-    "@arcium-hq/client": "0.8.3",
+    "@arcium-hq/client": "0.9.0",
     "@coral-xyz/anchor": "^0.32.1"
+  },
+  "resolutions": {
+    "@solana/web3.js": "1.91.9"
   },
   "devDependencies": {
     "chai": "^4.3.4",
