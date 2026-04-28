@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { SalaryBenchmark } from "../target/types/salary_benchmark";
 import { randomBytes } from "crypto";
 import * as fs from "fs";
@@ -26,6 +26,8 @@ import {
 import * as os from "os";
 import { expect } from "chai";
 
+const MIN_PARTICIPANTS_FOR_REVEAL = 10;
+
 describe("Salary Benchmark", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.SalaryBenchmark as Program<SalaryBenchmark>;
@@ -35,7 +37,6 @@ describe("Salary Benchmark", () => {
   const arciumEnv = getArciumEnv();
   const clusterAccount = getClusterAccAddress(arciumEnv.arciumClusterOffset);
 
-  // Helper: parse events from a transaction signature
   async function getEventsFromTx(sig: string): Promise<any[]> {
     const tx = await provider.connection.getTransaction(sig, {
       commitment: "confirmed",
@@ -46,14 +47,11 @@ describe("Salary Benchmark", () => {
       program.programId,
       new anchor.BorshCoder(program.idl)
     );
-    const events: any[] = [];
-    eventParser.parseLogs(tx.meta.logMessages, (event) => {
-      events.push(event);
-    });
-    return events;
+    return Array.from(
+      eventParser.parseLogs(tx.meta.logMessages) as unknown as Iterable<any>
+    );
   }
 
-  // Helper: derive benchmark PDA
   function getBenchmarkPDA(admin: PublicKey): PublicKey {
     return PublicKey.findProgramAddressSync(
       [Buffer.from("benchmark"), admin.toBuffer()],
@@ -61,7 +59,13 @@ describe("Salary Benchmark", () => {
     )[0];
   }
 
-  // Helper: init a comp def and upload circuit
+  function getParticipantPDA(wallet: PublicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("participant"), wallet.toBuffer()],
+      program.programId
+    )[0];
+  }
+
   async function initCompDef(
     methodName: string,
     circuitName: string,
@@ -104,7 +108,6 @@ describe("Salary Benchmark", () => {
     return sig;
   }
 
-  // Helper: get arcium accounts for queue_computation
   function getArciumAccounts(
     computationOffset: anchor.BN,
     circuitName: string
@@ -127,16 +130,68 @@ describe("Salary Benchmark", () => {
     };
   }
 
-  it("Full benchmark: init -> 5 salary submissions -> reveal average", async () => {
+  /// Submit a salary from `submitter` (a fresh keypair). The submitter must
+  /// have been airdropped enough SOL for fees + the participant PDA's rent.
+  async function submitFrom(
+    submitter: Keypair,
+    benchmarkPDA: PublicKey,
+    salaryCents: bigint,
+    mxePublicKey: Uint8Array
+  ): Promise<string> {
+    const privateKey = x25519.utils.randomSecretKey();
+    const publicKey = x25519.getPublicKey(privateKey);
+    const sharedSecret = x25519.getSharedSecret(privateKey, mxePublicKey);
+    const cipher = new RescueCipher(sharedSecret);
+
+    const nonce = randomBytes(16);
+    const ciphertext = cipher.encrypt([salaryCents], nonce);
+
+    const submitOffset = new anchor.BN(randomBytes(8), "hex");
+    const sig = await program.methods
+      .submitSalary(
+        submitOffset,
+        Array.from(publicKey) as any,
+        new anchor.BN(deserializeLE(nonce).toString()),
+        Array.from(ciphertext[0]) as any
+      )
+      .accountsPartial({
+        ...getArciumAccounts(submitOffset, "submit_salary"),
+        payer: submitter.publicKey,
+        benchmarkAccount: benchmarkPDA,
+        participantAccount: getParticipantPDA(submitter.publicKey),
+      })
+      .signers([submitter])
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+
+    await awaitComputationFinalization(
+      provider as anchor.AnchorProvider,
+      submitOffset,
+      program.programId,
+      "confirmed"
+    );
+    return sig;
+  }
+
+  async function airdropSubmitter(): Promise<Keypair> {
+    const kp = Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      kp.publicKey,
+      0.1 * LAMPORTS_PER_SOL
+    );
+    await provider.connection.confirmTransaction(sig, "confirmed");
+    return kp;
+  }
+
+  it("Full benchmark: init → 10 submissions → reveal", async function () {
+    this.timeout(0);
+
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
 
-    // =====================================================================
-    // Phase 1: Initialize computation definitions
-    // =====================================================================
+    // ---- Phase 1: comp defs ----
     console.log("Initializing computation definitions...");
     await initCompDef("initInitBenchmarkCompDef", "init_benchmark", owner);
     await initCompDef("initSubmitSalaryCompDef", "submit_salary", owner);
-    await initCompDef("initRevealAverageCompDef", "reveal_average", owner);
+    await initCompDef("initRevealTotalCompDef", "reveal_total", owner);
 
     const mxePublicKey = await getMXEPublicKeyWithRetry(
       provider as anchor.AnchorProvider,
@@ -144,106 +199,98 @@ describe("Salary Benchmark", () => {
     );
     console.log("MXE x25519 pubkey:", mxePublicKey);
 
-    // =====================================================================
-    // Phase 2: Initialize benchmark (create zeroed encrypted state)
-    // =====================================================================
+    // ---- Phase 2: init benchmark ----
     console.log("\n--- Init Benchmark ---");
     const initOffset = new anchor.BN(randomBytes(8), "hex");
     const benchmarkPDA = getBenchmarkPDA(owner.publicKey);
 
-    const initSig = await program.methods
+    await program.methods
       .initBenchmark(initOffset)
       .accountsPartial({
         ...getArciumAccounts(initOffset, "init_benchmark"),
         benchmarkAccount: benchmarkPDA,
       })
       .rpc({ skipPreflight: true, commitment: "confirmed" });
-    console.log("Init benchmark queue sig:", initSig);
 
-    const initFinalize = await awaitComputationFinalization(
+    await awaitComputationFinalization(
       provider as anchor.AnchorProvider,
       initOffset,
       program.programId,
       "confirmed"
     );
-    console.log("Init benchmark finalize sig:", initFinalize);
 
-    // Verify via account state (not events — avoids WebSocket race condition)
-    let benchmarkAcc = await program.account.benchmarkAccount.fetch(
-      benchmarkPDA
-    );
+    let benchmarkAcc = await program.account.benchmarkAccount.fetch(benchmarkPDA);
     expect(benchmarkAcc.isInitialized).to.be.true;
     expect(benchmarkAcc.participantCount).to.equal(0);
-    console.log("Benchmark initialized by:", benchmarkAcc.admin.toBase58());
-    console.log("Benchmark account initialized successfully");
 
-    // =====================================================================
-    // Phase 3: Submit 5 salaries (sequential — each must finalize first)
-    // =====================================================================
-    const salaries = [75000, 85000, 95000, 110000, 120000];
-    const salariesInCents = salaries.map((s) => s * 100);
+    // ---- Phase 3: submit 9 salaries (one short of threshold) ----
+    const salariesUsd = [75000, 85000, 95000, 110000, 120000, 90000, 100000, 130000, 80000];
+    const submitters: Keypair[] = [];
 
-    for (let i = 0; i < salariesInCents.length; i++) {
-      console.log(
-        `\n--- Submit Salary #${i + 1}: $${salaries[i].toLocaleString()} ---`
+    for (let i = 0; i < salariesUsd.length; i++) {
+      console.log(`\n--- Submit #${i + 1}: $${salariesUsd[i].toLocaleString()} ---`);
+      const submitter = await airdropSubmitter();
+      submitters.push(submitter);
+      await submitFrom(
+        submitter,
+        benchmarkPDA,
+        BigInt(salariesUsd[i] * 100),
+        mxePublicKey
       );
-
-      const privateKey = x25519.utils.randomSecretKey();
-      const publicKey = x25519.getPublicKey(privateKey);
-      const sharedSecret = x25519.getSharedSecret(privateKey, mxePublicKey);
-      const cipher = new RescueCipher(sharedSecret);
-
-      const nonce = randomBytes(16);
-      const ciphertext = cipher.encrypt(
-        [BigInt(salariesInCents[i])],
-        nonce
-      );
-
-      const submitOffset = new anchor.BN(randomBytes(8), "hex");
-
-      const submitSig = await program.methods
-        .submitSalary(
-          submitOffset,
-          Array.from(publicKey) as any,
-          new anchor.BN(deserializeLE(nonce).toString()),
-          Array.from(ciphertext[0]) as any
-        )
-        .accountsPartial({
-          ...getArciumAccounts(submitOffset, "submit_salary"),
-          benchmarkAccount: benchmarkPDA,
-        })
-        .rpc({ skipPreflight: true, commitment: "confirmed" });
-      console.log(`Submit queue sig:`, submitSig);
-
-      const submitFinalize = await awaitComputationFinalization(
-        provider as anchor.AnchorProvider,
-        submitOffset,
-        program.programId,
-        "confirmed"
-      );
-      console.log(`Submit finalize sig:`, submitFinalize);
-
-      // Verify via account state
       benchmarkAcc = await program.account.benchmarkAccount.fetch(benchmarkPDA);
-      console.log(`Participant count: ${benchmarkAcc.participantCount}`);
       expect(benchmarkAcc.participantCount).to.equal(i + 1);
     }
 
-    // Verify final participant count
+    // ---- Phase 4: reveal must fail at 9 participants ----
+    console.log("\n--- Reveal at 9 participants (should fail) ---");
+    {
+      const revealOffset = new anchor.BN(randomBytes(8), "hex");
+      let threw = false;
+      try {
+        await program.methods
+          .revealTotal(revealOffset)
+          .accountsPartial({
+            ...getArciumAccounts(revealOffset, "reveal_total"),
+            benchmarkAccount: benchmarkPDA,
+          })
+          .rpc({ skipPreflight: true, commitment: "confirmed" });
+      } catch (e: any) {
+        threw = true;
+        expect(String(e.message ?? e)).to.match(/InsufficientParticipants/);
+      }
+      expect(threw, "reveal_total should error below k-anonymity threshold").to.be.true;
+    }
+
+    // ---- Phase 5: 10th submission unlocks reveal ----
+    console.log("\n--- Submit #10 (unlocks reveal) ---");
+    const submitter10 = await airdropSubmitter();
+    submitters.push(submitter10);
+    await submitFrom(submitter10, benchmarkPDA, BigInt(100_000 * 100), mxePublicKey);
     benchmarkAcc = await program.account.benchmarkAccount.fetch(benchmarkPDA);
-    expect(benchmarkAcc.participantCount).to.equal(5);
-    console.log("\nAll 5 salaries submitted successfully");
+    expect(benchmarkAcc.participantCount).to.equal(MIN_PARTICIPANTS_FOR_REVEAL);
 
-    // =====================================================================
-    // Phase 4: Reveal average
-    // =====================================================================
-    console.log("\n--- Reveal Average ---");
+    // ---- Phase 6: sybil — same wallet can't submit twice ----
+    console.log("\n--- Sybil check (re-submit from same wallet) ---");
+    {
+      let threw = false;
+      try {
+        await submitFrom(submitters[0], benchmarkPDA, BigInt(100), mxePublicKey);
+      } catch (e: any) {
+        threw = true;
+        // Either AlreadySubmitted (our require!) or Anchor's account-already-in-use
+        // depending on which fires first. Both are correct rejections.
+        expect(String(e.message ?? e)).to.match(/AlreadySubmitted|already in use/);
+      }
+      expect(threw, "duplicate submission must be rejected").to.be.true;
+    }
+
+    // ---- Phase 7: reveal succeeds ----
+    console.log("\n--- Reveal at 10 participants ---");
     const revealOffset = new anchor.BN(randomBytes(8), "hex");
-
     const revealSig = await program.methods
-      .revealAverage(revealOffset)
+      .revealTotal(revealOffset)
       .accountsPartial({
-        ...getArciumAccounts(revealOffset, "reveal_average"),
+        ...getArciumAccounts(revealOffset, "reveal_total"),
         benchmarkAccount: benchmarkPDA,
       })
       .rpc({ skipPreflight: true, commitment: "confirmed" });
@@ -255,27 +302,24 @@ describe("Salary Benchmark", () => {
       program.programId,
       "confirmed"
     );
-    console.log("Reveal finalize sig:", revealFinalize);
 
-    // Parse the AverageRevealedEvent from the finalization transaction logs
     const events = await getEventsFromTx(revealFinalize);
-    const revealEvent = events.find(
-      (e) => e.name === "averageRevealedEvent"
-    );
-    expect(revealEvent).to.not.be.undefined;
+    const revealEvent = events.find((e) => e.name === "totalRevealedEvent");
+    expect(revealEvent, "totalRevealedEvent should be emitted").to.not.be.undefined;
 
-    const averageCents = Number(revealEvent!.data.average);
-    const averageDollars = averageCents / 100;
+    const totalCents = Number(revealEvent!.data.total);
+    const count = Number(revealEvent!.data.count);
+    const averageCents = totalCents / count;
 
-    console.log(`\nRevealed average (cents): ${averageCents}`);
-    console.log(`Revealed average (dollars): $${averageDollars.toLocaleString()}`);
+    expect(count).to.equal(MIN_PARTICIPANTS_FOR_REVEAL);
 
-    // Expected: (75000 + 85000 + 95000 + 110000 + 120000) / 5 = 97000
-    // In cents: (7500000 + 8500000 + 9500000 + 11000000 + 12000000) / 5 = 9700000
-    const expectedCents = 9700000;
-    expect(averageCents).to.equal(expectedCents);
+    const expectedTotal = (
+      salariesUsd.reduce((a, b) => a + b, 0) + 100_000
+    ) * 100;
+    expect(totalCents).to.equal(expectedTotal);
+
     console.log(
-      `\nSUCCESS: Average salary = $${averageDollars.toLocaleString()} (expected $97,000)`
+      `\nSUCCESS: total=${totalCents}¢ count=${count} avg=$${(averageCents / 100).toLocaleString()}`
     );
   });
 });
@@ -288,26 +332,16 @@ async function getMXEPublicKeyWithRetry(
 ): Promise<Uint8Array> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const mxePublicKey = await getMXEPublicKey(provider, programId);
-      if (mxePublicKey) {
-        return mxePublicKey;
-      }
+      const k = await getMXEPublicKey(provider, programId);
+      if (k) return k;
     } catch (error) {
-      console.log(
-        `Attempt ${attempt} failed to fetch MXE public key:`,
-        error
-      );
+      console.log(`Attempt ${attempt}: failed`, error);
     }
     if (attempt < maxRetries) {
-      console.log(
-        `Retrying in ${retryDelayMs}ms... (attempt ${attempt}/${maxRetries})`
-      );
       await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
   }
-  throw new Error(
-    `Failed to fetch MXE public key after ${maxRetries} attempts`
-  );
+  throw new Error(`Failed to fetch MXE public key after ${maxRetries} attempts`);
 }
 
 function readKpJson(path: string): anchor.web3.Keypair {

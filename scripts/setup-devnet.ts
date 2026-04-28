@@ -40,7 +40,7 @@ async function main() {
   for (const { method, circuit } of [
     { method: "initInitBenchmarkCompDef", circuit: "init_benchmark" },
     { method: "initSubmitSalaryCompDef", circuit: "submit_salary" },
-    { method: "initRevealAverageCompDef", circuit: "reveal_average" },
+    { method: "initRevealTotalCompDef", circuit: "reveal_total" },
   ]) {
     const baseSeed = getArciumAccountBaseSeed("ComputationDefinitionAccount");
     const offset = getCompDefAccOffset(circuit);

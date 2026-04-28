@@ -4,6 +4,13 @@ use arcis::*;
 mod circuits {
     use arcis::*;
 
+    /// Per-submission cap in cents ($10M/year). Real salaries fall well below
+    /// this; the cap exists to bound the impact of a single griefer who
+    /// submits an enormous value to skew the average. Above-cap values are
+    /// silently clamped — the secret comparison compiles to a multiplexer,
+    /// so both branches execute regardless.
+    const MAX_SALARY_CENTS: u64 = 1_000_000_000;
+
     /// A single salary submission.
     pub struct SalaryInput {
         pub salary: u64,
@@ -23,26 +30,39 @@ mod circuits {
         Mxe::get().from_arcis(stats)
     }
 
-    /// Add an encrypted salary to the running benchmark.
-    /// Takes user's Shared-encrypted salary + MXE-encrypted running stats,
-    /// returns updated MXE-encrypted stats.
+    /// Add an encrypted salary to the running benchmark, clamped to
+    /// MAX_SALARY_CENTS. Caller's `participant_count` PDA field stays in lock-
+    /// step with `count` here (every successful callback bumps both by one).
     #[instruction]
     pub fn submit_salary(
         salary: Enc<Shared, SalaryInput>,
         stats: Enc<Mxe, BenchmarkStats>,
     ) -> Enc<Mxe, BenchmarkStats> {
-        let input = salary.to_arcis();
+        let raw = salary.to_arcis().salary;
+        let clamped = if raw > MAX_SALARY_CENTS { MAX_SALARY_CENTS } else { raw };
+
         let mut current = stats.to_arcis();
-        current.total += input.salary;
+        current.total += clamped;
         current.count += 1;
         stats.owner.from_arcis(current)
     }
 
-    /// Reveal the average salary. Computes total/count and returns plaintext.
+    /// Reveal the running total and count as plaintext. The client divides
+    /// total/count to display the average.
+    ///
+    /// We reveal both fields (rather than just total) for two reasons:
+    /// 1. The compiler optimizes away unused encrypted inputs and warns when
+    ///    we pass a struct field we never read.
+    /// 2. Returning the encrypted-state count gives the frontend a sanity
+    ///    check against the on-chain plaintext `participant_count`. They
+    ///    must agree — disagreement signals a bug.
+    /// No privacy is lost: count is already public on-chain.
+    ///
+    /// Doing the division client-side avoids the most expensive op in Arcis
+    /// (in-MPC division), at zero privacy cost.
     #[instruction]
-    pub fn reveal_average(stats: Enc<Mxe, BenchmarkStats>) -> u64 {
+    pub fn reveal_total(stats: Enc<Mxe, BenchmarkStats>) -> (u64, u64) {
         let s = stats.to_arcis();
-        let avg = s.total / s.count;
-        avg.reveal()
+        (s.total.reveal(), s.count.reveal())
     }
 }

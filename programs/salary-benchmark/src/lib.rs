@@ -7,7 +7,20 @@ use arcium_macros::circuit_hash;
 
 const COMP_DEF_OFFSET_INIT_BENCHMARK: u32 = comp_def_offset("init_benchmark");
 const COMP_DEF_OFFSET_SUBMIT_SALARY: u32 = comp_def_offset("submit_salary");
-const COMP_DEF_OFFSET_REVEAL_AVERAGE: u32 = comp_def_offset("reveal_average");
+const COMP_DEF_OFFSET_REVEAL_TOTAL: u32 = comp_def_offset("reveal_total");
+
+/// k-anonymity threshold: with fewer participants, anyone who knows the prior
+/// participant_count and the revealed total can subtract their own
+/// contribution to learn another submitter's salary. 10 is small enough for a
+/// demo while making basic pairwise inference impractical.
+const MIN_PARTICIPANTS_FOR_REVEAL: u32 = 10;
+
+/// `queue_computation` parameters from arcium-anchor 0.9.x:
+/// - `num_callback_txs`: 1 (single callback transaction; the cluster races
+///   multiple submissions but only the first lands).
+/// - `cu_price_micro`: 0 (no extra compute-unit priority fee).
+const NUM_CALLBACK_TXS: u8 = 1;
+const CU_PRICE_MICRO: u64 = 0;
 
 declare_id!("F2ELc1JwtVm75jmJtafDnxDQa7yqM78HuZ2cgcvy8Waa");
 
@@ -47,14 +60,14 @@ pub mod salary_benchmark {
         Ok(())
     }
 
-    pub fn init_reveal_average_comp_def(
-        ctx: Context<InitRevealAverageCompDef>,
+    pub fn init_reveal_total_comp_def(
+        ctx: Context<InitRevealTotalCompDef>,
     ) -> Result<()> {
         init_comp_def(
             ctx.accounts,
             Some(CircuitSource::OffChain(OffChainCircuitSource {
-                source: "https://raw.githubusercontent.com/criptocbas/salary-benchmark-circuits/main/reveal_average.arcis".to_string(),
-                hash: circuit_hash!("reveal_average"),
+                source: "https://raw.githubusercontent.com/criptocbas/salary-benchmark-circuits/main/reveal_total.arcis".to_string(),
+                hash: circuit_hash!("reveal_total"),
             })),
             None,
         )?;
@@ -92,8 +105,8 @@ pub mod salary_benchmark {
                     is_writable: true,
                 }],
             )?],
-            1,
-            0,
+            NUM_CALLBACK_TXS,
+            CU_PRICE_MICRO,
         )?;
         Ok(())
     }
@@ -109,7 +122,10 @@ pub mod salary_benchmark {
             &ctx.accounts.computation_account,
         ) {
             Ok(InitBenchmarkOutput { field_0 }) => field_0,
-            Err(_) => return Err(ErrorCode::AbortedComputation.into()),
+            Err(e) => {
+                msg!("init_benchmark verify_output failed: {:?}", e);
+                return Err(ErrorCode::AbortedComputation.into());
+            }
         };
 
         let benchmark = &mut ctx.accounts.benchmark_account;
@@ -129,9 +145,16 @@ pub mod salary_benchmark {
     // =========================================================================
 
     /// Queue submit_salary computation.
+    ///
+    /// One submission per wallet is enforced by the `participant_account` PDA:
+    /// the runtime check below errors if the wallet has already submitted.
+    /// (We use init_if_needed + runtime check rather than plain init so the
+    /// failure surfaces as a typed AlreadySubmitted error, not the opaque
+    /// "account already in use" Anchor returns.)
+    ///
     /// ArgBuilder order:
-    ///   Enc<Shared, SalaryInput>: x25519_pubkey → nonce → ct_salary (1 field)
-    ///   Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count (2 fields)
+    ///   Enc<Shared, SalaryInput>: x25519_pubkey → nonce → ct_salary
+    ///   Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count
     pub fn submit_salary(
         ctx: Context<SubmitSalary>,
         computation_offset: u64,
@@ -145,16 +168,21 @@ pub mod salary_benchmark {
             ctx.accounts.benchmark_account.is_initialized,
             ErrorCode::BenchmarkNotInitialized
         );
+        require!(
+            !ctx.accounts.participant_account.has_submitted,
+            ErrorCode::AlreadySubmitted
+        );
+
+        ctx.accounts.participant_account.bump = ctx.bumps.participant_account;
+        ctx.accounts.participant_account.has_submitted = true;
 
         let benchmark = &ctx.accounts.benchmark_account;
         let stored_nonce = u128::from_le_bytes(benchmark.encrypted_nonce);
 
         let args = ArgBuilder::new()
-            // Enc<Shared, SalaryInput>: pubkey → nonce → encrypted salary
             .x25519_pubkey(pubkey)
             .plaintext_u128(nonce)
             .encrypted_u64(ct_salary)
-            // Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count
             .plaintext_u128(stored_nonce)
             .encrypted_u64(benchmark.ct_total)
             .encrypted_u64(benchmark.ct_count)
@@ -172,8 +200,8 @@ pub mod salary_benchmark {
                     is_writable: true,
                 }],
             )?],
-            1,
-            0,
+            NUM_CALLBACK_TXS,
+            CU_PRICE_MICRO,
         )?;
         Ok(())
     }
@@ -189,7 +217,10 @@ pub mod salary_benchmark {
             &ctx.accounts.computation_account,
         ) {
             Ok(SubmitSalaryOutput { field_0 }) => field_0,
-            Err(_) => return Err(ErrorCode::AbortedComputation.into()),
+            Err(e) => {
+                msg!("submit_salary verify_output failed: {:?}", e);
+                return Err(ErrorCode::AbortedComputation.into());
+            }
         };
 
         let benchmark = &mut ctx.accounts.benchmark_account;
@@ -205,13 +236,13 @@ pub mod salary_benchmark {
     }
 
     // =========================================================================
-    // Reveal Average — compute and reveal plaintext average
+    // Reveal Total — reveal plaintext total; client computes total / count
     // =========================================================================
 
-    /// Queue reveal_average computation.
-    /// ArgBuilder order for Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count
-    pub fn reveal_average(
-        ctx: Context<RevealAverage>,
+    /// Queue reveal_total computation.
+    /// Gated on MIN_PARTICIPANTS_FOR_REVEAL for k-anonymity.
+    pub fn reveal_total(
+        ctx: Context<RevealTotal>,
         computation_offset: u64,
     ) -> Result<()> {
         ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
@@ -221,8 +252,8 @@ pub mod salary_benchmark {
             ErrorCode::BenchmarkNotInitialized
         );
         require!(
-            ctx.accounts.benchmark_account.participant_count > 0,
-            ErrorCode::NoParticipants
+            ctx.accounts.benchmark_account.participant_count >= MIN_PARTICIPANTS_FOR_REVEAL,
+            ErrorCode::InsufficientParticipants
         );
 
         let benchmark = &ctx.accounts.benchmark_account;
@@ -238,32 +269,38 @@ pub mod salary_benchmark {
             ctx.accounts,
             computation_offset,
             args,
-            vec![RevealAverageCallback::callback_ix(
+            vec![RevealTotalCallback::callback_ix(
                 computation_offset,
                 &ctx.accounts.mxe_account,
                 &[],
             )?],
-            1,
-            0,
+            NUM_CALLBACK_TXS,
+            CU_PRICE_MICRO,
         )?;
         Ok(())
     }
 
-    /// Callback for reveal_average: emits the plaintext average.
-    #[arcium_callback(encrypted_ix = "reveal_average")]
-    pub fn reveal_average_callback(
-        ctx: Context<RevealAverageCallback>,
-        output: SignedComputationOutputs<RevealAverageOutput>,
+    /// Callback for reveal_total: emits the plaintext (total, count).
+    /// The macro flattens tuple returns into a nested struct
+    /// (`RevealTotalOutput.field_0` is `RevealTotalOutputStruct0` whose
+    /// `field_0`/`field_1` are the tuple elements).
+    #[arcium_callback(encrypted_ix = "reveal_total")]
+    pub fn reveal_total_callback(
+        ctx: Context<RevealTotalCallback>,
+        output: SignedComputationOutputs<RevealTotalOutput>,
     ) -> Result<()> {
-        let o = match output.verify_output(
+        let (total, count) = match output.verify_output(
             &ctx.accounts.cluster_account,
             &ctx.accounts.computation_account,
         ) {
-            Ok(RevealAverageOutput { field_0 }) => field_0,
-            Err(_) => return Err(ErrorCode::AbortedComputation.into()),
+            Ok(RevealTotalOutput { field_0: inner }) => (inner.field_0, inner.field_1),
+            Err(e) => {
+                msg!("reveal_total verify_output failed: {:?}", e);
+                return Err(ErrorCode::AbortedComputation.into());
+            }
         };
 
-        emit!(AverageRevealedEvent { average: o });
+        emit!(TotalRevealedEvent { total, count });
         Ok(())
     }
 }
@@ -281,6 +318,16 @@ pub struct BenchmarkAccount {
     pub encrypted_nonce: [u8; 16],
     pub ct_total: [u8; 32],
     pub ct_count: [u8; 32],
+}
+
+/// One per submitter. Existence + `has_submitted` enforce one submission per
+/// wallet. Sybil resistance is best-effort — a determined attacker can use
+/// many wallets, but each one costs gas and a (refundable) PDA rent deposit.
+#[account]
+#[derive(InitSpace)]
+pub struct ParticipantAccount {
+    pub bump: u8,
+    pub has_submitted: bool,
 }
 
 // =============================================================================
@@ -327,9 +374,9 @@ pub struct InitSubmitSalaryCompDef<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[init_computation_definition_accounts("reveal_average", payer)]
+#[init_computation_definition_accounts("reveal_total", payer)]
 #[derive(Accounts)]
-pub struct InitRevealAverageCompDef<'info> {
+pub struct InitRevealTotalCompDef<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(mut, address = derive_mxe_pda!())]
@@ -460,15 +507,23 @@ pub struct SubmitSalary<'info> {
         seeds = [b"benchmark", benchmark_account.admin.as_ref()],
         bump,
     )]
-    pub benchmark_account: Account<'info, BenchmarkAccount>,
+    pub benchmark_account: Box<Account<'info, BenchmarkAccount>>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + ParticipantAccount::INIT_SPACE,
+        seeds = [b"participant", payer.key().as_ref()],
+        bump,
+    )]
+    pub participant_account: Account<'info, ParticipantAccount>,
     pub system_program: Program<'info, System>,
     pub arcium_program: Program<'info, Arcium>,
 }
 
-#[queue_computation_accounts("reveal_average", payer)]
+#[queue_computation_accounts("reveal_total", payer)]
 #[derive(Accounts)]
 #[instruction(computation_offset: u64)]
-pub struct RevealAverage<'info> {
+pub struct RevealTotal<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(
@@ -500,7 +555,7 @@ pub struct RevealAverage<'info> {
     )]
     /// CHECK: computation_account, checked by the arcium program.
     pub computation_account: UncheckedAccount<'info>,
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_REVEAL_AVERAGE))]
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_REVEAL_TOTAL))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     #[account(
         mut,
@@ -566,11 +621,11 @@ pub struct SubmitSalaryCallback<'info> {
     pub benchmark_account: Account<'info, BenchmarkAccount>,
 }
 
-#[callback_accounts("reveal_average")]
+#[callback_accounts("reveal_total")]
 #[derive(Accounts)]
-pub struct RevealAverageCallback<'info> {
+pub struct RevealTotalCallback<'info> {
     pub arcium_program: Program<'info, Arcium>,
-    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_REVEAL_AVERAGE))]
+    #[account(address = derive_comp_def_pda!(COMP_DEF_OFFSET_REVEAL_TOTAL))]
     pub comp_def_account: Account<'info, ComputationDefinitionAccount>,
     #[account(address = derive_mxe_pda!())]
     pub mxe_account: Account<'info, MXEAccount>,
@@ -600,8 +655,9 @@ pub struct SalarySubmittedEvent {
 }
 
 #[event]
-pub struct AverageRevealedEvent {
-    pub average: u64,
+pub struct TotalRevealedEvent {
+    pub total: u64,
+    pub count: u64,
 }
 
 // =============================================================================
@@ -616,6 +672,8 @@ pub enum ErrorCode {
     ClusterNotSet,
     #[msg("Benchmark not initialized")]
     BenchmarkNotInitialized,
-    #[msg("No participants yet")]
-    NoParticipants,
+    #[msg("Not enough participants for reveal (k-anonymity threshold)")]
+    InsufficientParticipants,
+    #[msg("This wallet has already submitted a salary")]
+    AlreadySubmitted,
 }

@@ -249,16 +249,16 @@ export type SalaryBenchmark = {
       "args": []
     },
     {
-      "name": "initRevealAverageCompDef",
+      "name": "initRevealTotalCompDef",
       "discriminator": [
-        169,
-        28,
-        170,
-        121,
-        121,
-        117,
-        255,
-        137
+        132,
+        52,
+        155,
+        236,
+        10,
+        87,
+        234,
+        254
       ],
       "accounts": [
         {
@@ -339,20 +339,20 @@ export type SalaryBenchmark = {
       "args": []
     },
     {
-      "name": "revealAverage",
+      "name": "revealTotal",
       "docs": [
-        "Queue reveal_average computation.",
-        "ArgBuilder order for Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count"
+        "Queue reveal_total computation.",
+        "Gated on MIN_PARTICIPANTS_FOR_REVEAL for k-anonymity."
       ],
       "discriminator": [
-        76,
-        199,
-        181,
-        97,
-        177,
-        143,
-        95,
-        10
+        195,
+        47,
+        0,
+        136,
+        238,
+        148,
+        251,
+        45
       ],
       "accounts": [
         {
@@ -467,19 +467,22 @@ export type SalaryBenchmark = {
       ]
     },
     {
-      "name": "revealAverageCallback",
+      "name": "revealTotalCallback",
       "docs": [
-        "Callback for reveal_average: emits the plaintext average."
+        "Callback for reveal_total: emits the plaintext (total, count).",
+        "The macro flattens tuple returns into a nested struct",
+        "(`RevealTotalOutput.field_0` is `RevealTotalOutputStruct0` whose",
+        "`field_0`/`field_1` are the tuple elements)."
       ],
       "discriminator": [
-        28,
-        126,
-        163,
-        200,
-        168,
-        21,
-        72,
-        78
+        225,
+        15,
+        51,
+        43,
+        1,
+        253,
+        82,
+        38
       ],
       "accounts": [
         {
@@ -514,7 +517,7 @@ export type SalaryBenchmark = {
                   "kind": "type",
                   "type": {
                     "defined": {
-                      "name": "revealAverageOutput"
+                      "name": "revealTotalOutput"
                     }
                   }
                 }
@@ -528,9 +531,16 @@ export type SalaryBenchmark = {
       "name": "submitSalary",
       "docs": [
         "Queue submit_salary computation.",
+        "",
+        "One submission per wallet is enforced by the `participant_account` PDA:",
+        "the runtime check below errors if the wallet has already submitted.",
+        "(We use init_if_needed + runtime check rather than plain init so the",
+        "failure surfaces as a typed AlreadySubmitted error, not the opaque",
+        "\"account already in use\" Anchor returns.)",
+        "",
         "ArgBuilder order:",
-        "Enc<Shared, SalaryInput>: x25519_pubkey → nonce → ct_salary (1 field)",
-        "Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count (2 fields)"
+        "Enc<Shared, SalaryInput>: x25519_pubkey → nonce → ct_salary",
+        "Enc<Mxe, BenchmarkStats>: nonce → ct_total, ct_count"
       ],
       "discriminator": [
         153,
@@ -635,6 +645,34 @@ export type SalaryBenchmark = {
                 "kind": "account",
                 "path": "benchmark_account.admin",
                 "account": "benchmarkAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "participantAccount",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  99,
+                  105,
+                  112,
+                  97,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
               }
             ]
           }
@@ -831,22 +869,22 @@ export type SalaryBenchmark = {
         17,
         117
       ]
+    },
+    {
+      "name": "participantAccount",
+      "discriminator": [
+        239,
+        31,
+        144,
+        66,
+        245,
+        178,
+        84,
+        109
+      ]
     }
   ],
   "events": [
-    {
-      "name": "averageRevealedEvent",
-      "discriminator": [
-        10,
-        83,
-        176,
-        119,
-        13,
-        138,
-        245,
-        48
-      ]
-    },
     {
       "name": "benchmarkInitializedEvent",
       "discriminator": [
@@ -872,6 +910,19 @@ export type SalaryBenchmark = {
         128,
         0
       ]
+    },
+    {
+      "name": "totalRevealedEvent",
+      "discriminator": [
+        31,
+        224,
+        253,
+        160,
+        192,
+        106,
+        134,
+        49
+      ]
     }
   ],
   "errors": [
@@ -892,8 +943,13 @@ export type SalaryBenchmark = {
     },
     {
       "code": 6003,
-      "name": "noParticipants",
-      "msg": "No participants yet"
+      "name": "insufficientParticipants",
+      "msg": "Not enough participants for reveal (k-anonymity threshold)"
+    },
+    {
+      "code": 6004,
+      "name": "alreadySubmitted",
+      "msg": "This wallet has already submitted a salary"
     }
   ],
   "types": [
@@ -929,18 +985,6 @@ export type SalaryBenchmark = {
           {
             "name": "bump",
             "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "averageRevealedEvent",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "average",
-            "type": "u64"
           }
         ]
       }
@@ -1701,7 +1745,28 @@ export type SalaryBenchmark = {
       }
     },
     {
-      "name": "revealAverageOutput",
+      "name": "participantAccount",
+      "docs": [
+        "One per submitter. Existence + `has_submitted` enforce one submission per",
+        "wallet. Sybil resistance is best-effort — a determined attacker can use",
+        "many wallets, but each one costs gas and a (refundable) PDA rent deposit."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "hasSubmitted",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "revealTotalOutput",
       "docs": [
         "The output of the callback instruction. Provided as a struct with ordered fields",
         "as anchor does not support tuples and tuple structs yet."
@@ -1711,6 +1776,26 @@ export type SalaryBenchmark = {
         "fields": [
           {
             "name": "field0",
+            "type": {
+              "defined": {
+                "name": "revealTotalOutputStruct0"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "revealTotalOutputStruct0",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "field0",
+            "type": "u64"
+          },
+          {
+            "name": "field1",
             "type": "u64"
           }
         ]
@@ -1838,6 +1923,22 @@ export type SalaryBenchmark = {
         "fields": [
           {
             "name": "timestamp",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "totalRevealedEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "total",
+            "type": "u64"
+          },
+          {
+            "name": "count",
             "type": "u64"
           }
         ]
